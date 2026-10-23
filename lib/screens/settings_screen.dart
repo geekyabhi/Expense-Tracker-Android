@@ -4,6 +4,7 @@ import '../services/api_service.dart';
 import '../services/events_api.dart';
 import '../services/events_service.dart';
 import '../services/events_settings.dart';
+import '../services/expense_repository.dart';
 import '../services/watcher_channel.dart';
 import 'settings/app_watcher_page.dart';
 import 'settings/events_page.dart';
@@ -14,11 +15,16 @@ import 'settings/permissions_page.dart';
 /// The settings home: a short list of folders. Each folder opens its own page
 /// and shows a one-line status.
 class SettingsScreen extends StatefulWidget {
-  SettingsScreen({super.key, required this.api, EventsService? events})
+  SettingsScreen(
+      {super.key, required this.api, EventsService? events, this.repo})
       : events = events ??
             EventsService(api: EventsApi(settings: EventsSettings()));
   final ApiService api;
   final EventsService events;
+
+  /// Needed to deal with the expenses on the phone when the Notion database is
+  /// switched. Without it, switching just changes the connection.
+  final ExpenseRepository? repo;
 
   @override
   State<SettingsScreen> createState() => _SettingsScreenState();
@@ -149,7 +155,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
             icon: Icons.account_balance_wallet_outlined,
             title: 'Expenses & Notion',
             summary: _notionSummary,
-            onTap: () => _open(NotionSettingsPage(api: widget.api)),
+            onTap: () =>
+                _open(NotionSettingsPage(api: widget.api, repo: widget.repo)),
           ),
           _folder(
             icon: Icons.event_outlined,

@@ -31,6 +31,13 @@ android {
 
     buildTypes {
         release {
+            // Code shrinking (R8) removed methods that the settings storage
+            // (shared_preferences) looks up by name, so every save failed in
+            // release builds. The Dart code is unaffected by this, and the
+            // Android code is small, so the size cost is minimal.
+            isMinifyEnabled = false
+            isShrinkResources = false
+
             // TODO: Add your own signing config for the release build.
             // Signing with the debug keys for now, so `flutter run --release` works.
             signingConfig = signingConfigs.getByName("debug")

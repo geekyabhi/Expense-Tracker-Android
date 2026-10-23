@@ -1,14 +1,19 @@
 import 'package:flutter/material.dart';
 
 import '../../services/api_service.dart';
+import '../../services/expense_repository.dart';
 import '../../services/notion_settings.dart';
 import '../../services/watcher_channel.dart';
 import 'settings_ui.dart';
 
 /// Folder: the expenses database (token, database id) and the sync mode.
 class NotionSettingsPage extends StatefulWidget {
-  const NotionSettingsPage({super.key, required this.api});
+  const NotionSettingsPage({super.key, required this.api, this.repo});
   final ApiService api;
+
+  /// When given, switching to a different database also refreshes the expenses
+  /// on the phone. Without it only the connection changes.
+  final ExpenseRepository? repo;
 
   @override
   State<NotionSettingsPage> createState() => _NotionSettingsPageState();
@@ -21,6 +26,7 @@ class _NotionSettingsPageState extends State<NotionSettingsPage> {
   bool _showToken = false;
   bool _checking = false;
   String? _result;
+  bool _resultOk = false;
 
   @override
   void dispose() {
@@ -57,20 +63,114 @@ class _NotionSettingsPageState extends State<NotionSettingsPage> {
     await _persist();
   }
 
+  /// Same database whatever the spelling (link, dashes, case).
+  static String _dbKey(String id) => NotionSettings.normalizeDatabaseId(id)
+      .replaceAll('-', '')
+      .toLowerCase();
+
   Future<void> _saveAndTest() async {
     setState(() {
       _checking = true;
       _result = null;
+      _resultOk = false;
     });
-    await _save();
-    final result = widget.api.settings.isConfigured
-        ? await widget.api.checkDatabase()
-        : 'Enter both the token and the database ID.';
+    final before = widget.api.settings.databaseId; // the database in use so far
+    // Saving can fail (storage problem). That must not stop the test, and the
+    // spinner must always stop, so both are guarded.
+    String? saveProblem;
+    String result;
+    try {
+      try {
+        await _save();
+      } catch (e) {
+        saveProblem = '$e';
+      }
+      result = widget.api.settings.isConfigured
+          ? await widget.api.checkDatabase()
+          : 'Enter both the token and the database ID.';
+
+      // A different database that tests fine: the expenses on the phone belong
+      // to the old one, so they have to be dealt with. Never on a failed test
+      // (a typo must not wipe anything), and never for a first-time setup or a
+      // token-only change.
+      final switched = before.trim().isNotEmpty &&
+          _dbKey(before) != _dbKey(widget.api.settings.databaseId);
+      if (result.contains('look right') && switched && widget.repo != null) {
+        // Show the test result and stop the spinner while the question is open.
+        if (mounted) {
+          setState(() {
+            _checking = false;
+            _result = result;
+          });
+        }
+        final note = await _switchDatabase();
+        if (note != null) result = '$result $note';
+      }
+    } catch (e) {
+      result = 'Something went wrong: $e';
+    }
+    if (saveProblem != null) {
+      result = '$result Could not save these settings on the phone, so they '
+          'will be lost when the app closes ($saveProblem).';
+    }
     if (!mounted) return;
     setState(() {
       _checking = false;
       _result = result;
+      _resultOk = saveProblem == null && result.contains('look right');
     });
+  }
+
+  /// Asks what to do with the expenses of the old database, does it, and loads
+  /// the new database. Returns a sentence for the result line (null = nothing).
+  Future<String?> _switchDatabase() async {
+    final repo = widget.repo!;
+    final uploaded =
+        repo.expenses.where((e) => e.synced && e.remoteId != null).length;
+    final others = repo.expenses.length - uploaded;
+
+    var replace = true; // nothing on the phone: nothing to lose
+    if (repo.expenses.isNotEmpty) {
+      final choice = await showDialog<bool>(
+        context: context,
+        barrierDismissible: false,
+        builder: (ctx) => AlertDialog(
+          title: const Text('Switch to the new database?'),
+          content: Text(
+            'You changed to a different Notion database, but the expenses on '
+            'this phone belong to the old one.\n\n'
+            '• $uploaded already uploaded to the old database\n'
+            '• $others not uploaded, or edited since\n\n'
+            'Replace: remove the $uploaded uploaded ones (they stay safe in the '
+            'old database), keep the $others others so you can push them to the '
+            'new one, and load the new database.\n\n'
+            'Keep all: remove nothing. Every expense stays and can be pushed to '
+            'the new database; the new database is loaded too.',
+          ),
+          actions: [
+            TextButton(
+                onPressed: () => Navigator.pop(ctx, false),
+                child: const Text('Keep all')),
+            FilledButton(
+                style: FilledButton.styleFrom(
+                    minimumSize: const Size(0, 40),
+                    padding: const EdgeInsets.symmetric(horizontal: 20)),
+                onPressed: () => Navigator.pop(ctx, true),
+                child: const Text('Replace')),
+          ],
+        ),
+      );
+      if (choice == null) return null;
+      replace = choice;
+    }
+    if (mounted) setState(() => _checking = true); // loading the new database
+
+    final r = await repo.switchDatabase(replace: replace);
+    final loaded = r.imported.error != null
+        ? 'could not load the new database (${r.imported.error})'
+        : 'loaded ${r.imported.added} from the new database';
+    return 'Switched: removed ${r.removed}, kept ${r.detached} to push to the '
+        'new database, $loaded.';
   }
 
   @override
@@ -126,9 +226,7 @@ class _NotionSettingsPageState extends State<NotionSettingsPage> {
                   const SizedBox(height: 12),
                   Text(_result!,
                       style: TextStyle(
-                          color: _result!.contains('look right')
-                              ? Colors.green
-                              : scheme.error)),
+                          color: _resultOk ? Colors.green : scheme.error)),
                 ],
                 const SizedBox(height: 8),
                 Text(

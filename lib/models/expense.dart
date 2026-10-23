@@ -53,6 +53,7 @@ class Expense {
     bool? synced,
     bool? processed,
     String? remoteId,
+    bool clearRemoteId = false, // forget the Notion page (e.g. database switched)
   }) =>
       Expense(
         id: id,
@@ -65,7 +66,7 @@ class Expense {
         mode: mode ?? this.mode,
         synced: synced ?? this.synced,
         processed: processed ?? this.processed,
-        remoteId: remoteId ?? this.remoteId,
+        remoteId: clearRemoteId ? null : (remoteId ?? this.remoteId),
       );
 
   Map<String, Object?> toDb() => {

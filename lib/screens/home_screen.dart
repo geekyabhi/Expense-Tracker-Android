@@ -146,28 +146,70 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       action: SnackBarAction(
         label: 'Settings',
         onPressed: () => Navigator.of(context).push(MaterialPageRoute(
-            builder: (_) => SettingsScreen(api: repo.api, events: widget.events))),
+            builder: (_) => SettingsScreen(api: repo.api, events: widget.events, repo: repo))),
       ),
     ));
     return false;
   }
 
+  /// Asks before removing expenses that were deleted in Notion: the phone's
+  /// copy would then be the only copy.
+  Future<bool> _confirmRemoval(List<Expense> missing) async {
+    if (!mounted) return false;
+    final n = missing.length;
+    final shown = missing.take(5).map((e) => '• ${e.title}').join('\n');
+    final more = n > 5 ? '\n…and ${n - 5} more' : '';
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text('$n expense${n == 1 ? ' was' : 's were'} deleted in Notion'),
+        content: Text(
+          '$shown$more\n\nRemove ${n == 1 ? 'it' : 'them'} from this phone too? '
+          'This phone would no longer have ${n == 1 ? 'it' : 'them'} anywhere. '
+          'Notion keeps deleted pages in its trash for a while.\n\n'
+          'If you keep ${n == 1 ? 'it' : 'them'}, ${n == 1 ? 'it is' : 'they are'} '
+          'marked as not uploaded, so you can push ${n == 1 ? 'it' : 'them'} to '
+          'Notion again.',
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Keep on phone')),
+          TextButton(
+              style: TextButton.styleFrom(
+                  foregroundColor: Theme.of(ctx).colorScheme.error),
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('Remove')),
+        ],
+      ),
+    );
+    return ok ?? false;
+  }
+
   Future<void> _syncFromNotion() async {
     if (!_notionReady()) return;
     final messenger = ScaffoldMessenger.of(context);
-    final r = await repo.importFromNotion();
+    final r = await repo.importFromNotion(confirmRemoval: _confirmRemoval);
     if (!mounted) return;
     final parts = [
-      if (r.added > 0) 'Added ${r.added} from Notion',
+      if (r.added > 0) 'Added ${r.added}',
+      if (r.updated > 0) 'updated ${r.updated} from Notion edits',
+      if (r.removed > 0) 'removed ${r.removed} deleted in Notion',
       if (r.refreshed > 0) 'updated ${r.refreshed} processed status',
     ];
+    var text = r.error ??
+        (parts.isEmpty
+            ? 'Already matches Notion (${r.total} expense${r.total == 1 ? '' : 's'}).'
+            : '${parts.join(', ')}.');
+    if (r.error == null && r.missing > 0) {
+      text += ' ${r.missing} not in Notion, kept on the phone and marked not '
+          'uploaded.';
+    }
     messenger
       ..hideCurrentSnackBar()
       ..showSnackBar(SnackBar(
-        content: Text(r.error ??
-            (parts.isEmpty
-                ? 'Already up to date (${r.total} in Notion)'
-                : parts.join(', '))),
+        content: Text(text),
+        duration: const Duration(seconds: 6),
       ));
   }
 
@@ -307,7 +349,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           icon: const Icon(Icons.settings_outlined),
           onPressed: () => Navigator.of(context).push(
               MaterialPageRoute(
-              builder: (_) => SettingsScreen(api: repo.api, events: widget.events))),
+              builder: (_) => SettingsScreen(api: repo.api, events: widget.events, repo: repo))),
         ),
       ],
     );

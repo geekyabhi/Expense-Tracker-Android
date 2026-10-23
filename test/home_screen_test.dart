@@ -263,7 +263,7 @@ void main() {
     await t.pumpAndSettle();
 
     expect(find.text('Chai'), findsOneWidget);
-    expect(find.text('Added 1 from Notion'), findsOneWidget);
+    expect(find.text('Added 1.'), findsOneWidget);
   });
 
   testWidgets('delete from the edit screen asks, then removes and archives',
@@ -471,5 +471,59 @@ void main() {
     await t.longPress(find.widgetWithText(ChoiceChip, 'Direct'));
     await t.pumpAndSettle();
     expect(find.textContaining('default mode'), findsOneWidget);
+  });
+
+  testWidgets('refresh asks before removing expenses deleted in Notion',
+      (t) async {
+    await pumpHome(t);
+    // 'a' is on the phone and was uploaded; Notion no longer has it.
+    db.rows['a'] = db.rows['a']!.copyWith(remoteId: 'page-a', synced: true);
+    await repo.reload();
+    await t.pumpAndSettle();
+    queryBody = jsonEncode({
+      'results': [
+        {
+          'id': 'page-other',
+          'properties': {
+            'Expense': {
+              'title': [
+                {'plain_text': 'Something else'}
+              ]
+            },
+            'Amount': {'number': 7},
+            'Date': {
+              'date': {'start': '2026-10-05'}
+            },
+          },
+        }
+      ],
+      'has_more': false,
+    });
+
+    await t.tap(find.byTooltip('Sync from Notion'));
+    await t.pumpAndSettle();
+    expect(find.textContaining('deleted in Notion'), findsOneWidget);
+    expect(find.textContaining('Lunch'), findsWidgets); // named in the question
+
+    // Keep it on the phone first: it stays, and stops saying "uploaded".
+    await t.tap(find.widgetWithText(TextButton, 'Keep on phone'));
+    await t.pumpAndSettle();
+    expect(db.rows.containsKey('a'), isTrue);
+    expect(db.rows['a']!.synced, isFalse);
+    expect(db.rows['a']!.remoteId, isNull);
+    expect(find.textContaining('kept on the phone and marked not uploaded'),
+        findsOneWidget);
+    expect(find.text('On device'), findsWidgets);
+
+    // Pretend it was uploaded again and then deleted in Notion; this time remove it.
+    db.rows['a'] = db.rows['a']!.copyWith(remoteId: 'page-a', synced: true);
+    await repo.reload();
+    await t.pumpAndSettle();
+    await t.tap(find.byTooltip('Sync from Notion'));
+    await t.pumpAndSettle();
+    await t.tap(find.widgetWithText(TextButton, 'Remove'));
+    await t.pumpAndSettle();
+    expect(db.rows.containsKey('a'), isFalse);
+    expect(find.textContaining('removed 1 deleted in Notion'), findsOneWidget);
   });
 }

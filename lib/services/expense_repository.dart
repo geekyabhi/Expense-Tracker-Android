@@ -23,9 +23,21 @@ class PushResult {
 }
 
 class ImportSummary {
-  const ImportSummary({this.added = 0, this.refreshed = 0, this.total = 0, this.error});
+  const ImportSummary(
+      {this.added = 0,
+      this.updated = 0,
+      this.removed = 0,
+      this.missing = 0,
+      this.refreshed = 0,
+      this.known = 0,
+      this.total = 0,
+      this.error});
   final int added; // new expenses brought in from Notion
+  final int updated; // existing expenses changed to match an edit made in Notion
+  final int removed; // expenses removed because they were deleted in Notion
+  final int missing; // gone from Notion but kept on the phone (declined/skipped)
   final int refreshed; // existing expenses whose Processed flag changed
+  final int known; // Notion rows that were already on the phone
   final int total; // pages Notion returned
   final String? error;
 }
@@ -35,6 +47,13 @@ class DeleteSummary {
   final int removed; // expenses removed from the phone
   final int archived; // Notion pages archived right now
   final int queued; // archives still waiting (manual mode, or offline)
+}
+
+class SwitchSummary {
+  const SwitchSummary({this.removed = 0, this.detached = 0, required this.imported});
+  final int removed; // expenses of the old database taken off this phone
+  final int detached; // expenses kept, no longer linked to the old database
+  final ImportSummary imported; // what the new database brought in
 }
 
 class BulkSummary {
@@ -179,6 +198,41 @@ class ExpenseRepository extends ChangeNotifier {
     return BulkSummary(uploaded, failed);
   }
 
+  // ------------------------------------------------- switching databases
+
+  /// Called when the expenses database was changed to a different one. The
+  /// expenses on the phone are still linked to pages of the old database, so
+  /// they are dealt with, then the new database is loaded.
+  ///
+  /// [replace] true: expenses already uploaded to the old database (and not
+  /// edited since) are removed from the phone, because they are safe there.
+  /// false: nothing is removed.
+  /// Either way, an expense that is NOT safely in the old database (never
+  /// pushed, or edited after its push) is kept, and every kept expense is
+  /// detached from the old database (no Notion link, marked not uploaded) so it
+  /// can be pushed to the new one. Waiting deletions for the old database are
+  /// dropped, since they point at pages that belong to it.
+  Future<SwitchSummary> switchDatabase({required bool replace}) async {
+    var removed = 0, detached = 0;
+    for (final e in await _db.all()) {
+      final safeInOld = e.synced && e.remoteId != null;
+      if (replace && safeInOld) {
+        await _db.delete(e.id);
+        removed++;
+      } else if (e.synced || e.remoteId != null || e.processed) {
+        await _db.insert(e.copyWith(
+            synced: false, processed: false, clearRemoteId: true));
+        detached++;
+      }
+    }
+    for (final pageId in await _db.pendingDeletes()) {
+      await _db.removePendingDelete(pageId);
+    }
+    await reload();
+    final imported = await importFromNotion();
+    return SwitchSummary(removed: removed, detached: detached, imported: imported);
+  }
+
   Future<void> reload() async {
     expenses = await _db.all();
     pendingDeletes = (await _db.pendingDeletes()).length;
@@ -232,46 +286,140 @@ class ExpenseRepository extends ChangeNotifier {
 
   static String _norm(String id) => id.replaceAll('-', '').toLowerCase();
 
-  /// "Sync from Notion". Import only: brings in Notion rows the phone doesn't
-  /// have and never changes the ones it does, with one exception: the
-  /// read-only Processed flag, which is refreshed so the row colour is right.
-  /// Pages whose expense was deleted here (archive pending) are skipped so they
-  /// don't come back.
-  Future<ImportSummary> importFromNotion() async {
+  static bool _sameMinute(DateTime a, DateTime b) =>
+      a.year == b.year &&
+      a.month == b.month &&
+      a.day == b.day &&
+      a.hour == b.hour &&
+      a.minute == b.minute;
+
+  /// Does the phone's copy already match what Notion has? (The note isn't in
+  /// Notion, and seconds aren't compared.)
+  static bool _sameAsNotion(Expense local, Expense notion) =>
+      local.title.trim() == notion.title.trim() &&
+      local.amount == notion.amount &&
+      local.category == notion.category &&
+      local.mode == notion.mode &&
+      local.source == notion.source &&
+      _sameMinute(local.date, notion.date);
+
+  /// "Sync from Notion": makes the phone match Notion.
+  ///
+  /// * rows the phone doesn't have are added;
+  /// * an expense that is safely in sync (uploaded, not edited here since) is
+  ///   updated to match edits made in Notion, and its Processed flag refreshed;
+  /// * an expense that was deleted/archived in Notion is removed from the phone
+  ///   (see [confirmRemoval]);
+  /// * an expense never pushed, or edited on the phone since its push, is never
+  ///   changed or removed (only its Processed flag is refreshed).
+  ///
+  /// [confirmRemoval] is asked with the expenses that are gone from Notion.
+  /// Without it nothing is ever removed. Nothing is removed either when Notion
+  /// returns no rows at all, since that is more likely a wrong database than
+  /// every expense being deleted. An expense that is kept although it is not in
+  /// Notion is marked "not uploaded" (no Notion link), so it can be pushed
+  /// again. Pages whose deletion is pending are skipped, so they don't come back.
+  Future<ImportSummary> importFromNotion({
+    Future<bool> Function(List<Expense> missing)? confirmRemoval,
+  }) async {
     if (importing) return const ImportSummary();
     importing = true;
     notifyListeners();
     try {
-      final pages = await _api.queryAllPages();
+      final pages = await _api.queryAllPages(); // complete, or it throws
+      final local = await _db.all();
       final byRemote = {
-        for (final e in await _db.all())
+        for (final e in local)
           if (e.remoteId != null) _norm(e.remoteId!): e
       };
-      final queuedDeletes =
-          (await _db.pendingDeletes()).map(_norm).toSet();
+      final queuedDeletes = (await _db.pendingDeletes()).map(_norm).toSet();
 
-      var added = 0, refreshed = 0;
+      var added = 0, updated = 0, refreshed = 0, known = 0;
+      final seen = <String>{};
       for (final page in pages) {
         final parsed = ApiService.expenseFromPage(page);
         if (parsed == null) continue;
         final key = _norm(parsed.remoteId!);
+        seen.add(key);
         if (queuedDeletes.contains(key)) continue;
         final existing = byRemote[key];
         if (existing == null) {
           await _db.insert(parsed);
           byRemote[key] = parsed;
           added++;
+          continue;
+        }
+        known++;
+        if (existing.synced && !_sameAsNotion(existing, parsed)) {
+          // Safely in sync here, so the edit made in Notion wins.
+          await _db.insert(existing.copyWith(
+            title: parsed.title,
+            amount: parsed.amount,
+            category: parsed.category,
+            date: parsed.date,
+            source: parsed.source,
+            mode: parsed.mode,
+            processed: parsed.processed,
+          ));
+          updated++;
         } else if (existing.processed != parsed.processed) {
           await _db.setProcessed(existing.id, parsed.processed);
           refreshed++;
         }
       }
-      return ImportSummary(added: added, refreshed: refreshed, total: pages.length);
+
+      // Uploaded and unchanged here, yet no longer in Notion: deleted there.
+      final missing = [
+        for (final e in local)
+          if (e.remoteId != null &&
+              e.synced &&
+              !seen.contains(_norm(e.remoteId!)))
+            e
+      ];
+      var removed = 0;
+      if (missing.isNotEmpty) {
+        var remove = false;
+        if (pages.isNotEmpty && confirmRemoval != null) {
+          // Fetching is done: don't keep spinning behind the question.
+          importing = false;
+          notifyListeners();
+          remove = await confirmRemoval(missing);
+        }
+        if (remove) {
+          for (final e in missing) {
+            await _db.delete(e.id);
+            removed++;
+          }
+        } else if (pages.isEmpty || confirmRemoval != null) {
+          // Kept, but they are not in this Notion database. Stop calling them
+          // "uploaded" (and drop the link to a page that isn't here), so they can
+          // be pushed again as new pages. Without a way to ask, they are left
+          // exactly as they were.
+          for (final e in missing) {
+            await _db.insert(e.copyWith(
+                synced: false, processed: false, clearRemoteId: true));
+          }
+        }
+      }
+
+      return ImportSummary(
+        added: added,
+        updated: updated,
+        removed: removed,
+        missing: missing.length - removed,
+        refreshed: refreshed,
+        known: known,
+        total: pages.length,
+      );
     } on ApiRejected catch (err) {
       return ImportSummary(error: 'Notion: ${err.message}');
     } on ApiOffline {
       return const ImportSummary(
           error: 'No connection, or Notion is busy. Try again.');
+    } catch (e) {
+      // Anything unexpected (a reply that can't be read...) must still end in a
+      // message instead of a button that silently does nothing.
+      return ImportSummary(error: 'Could not read the Notion database ($e)');
     } finally {
       importing = false;
       await reload();

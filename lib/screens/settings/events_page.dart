@@ -24,6 +24,7 @@ class _EventsSettingsPageState extends State<EventsSettingsPage> {
   bool _showToken = false;
   bool _checking = false;
   String? _result;
+  bool _resultOk = false;
 
   @override
   void dispose() {
@@ -36,6 +37,7 @@ class _EventsSettingsPageState extends State<EventsSettingsPage> {
     setState(() {
       _checking = true;
       _result = null;
+      _resultOk = false;
     });
     final s = widget.events.settings;
     s.token = _token.text
@@ -44,21 +46,37 @@ class _EventsSettingsPageState extends State<EventsSettingsPage> {
     _token.text = s.token;
     s.databaseId = NotionSettings.normalizeDatabaseId(_db.text);
     _db.text = s.databaseId;
+
+    // Saving can fail (storage problem). That must not stop the test, and the
+    // spinner must always stop, so everything is guarded.
+    String? saveProblem;
+    String result;
     try {
-      await s.save();
-    } catch (_) {}
-    await widget.events.clearCache(); // the credentials may have changed
-    var result = s.isConfigured
-        ? await widget.events.api.checkConnection()
-        : 'Enter both the events token and the events database ID.';
-    if (result.contains('look right')) {
-      // Say plainly what is on today and what comes next.
-      result = '$result ${await widget.events.todaySummary()}';
+      try {
+        await s.save();
+      } catch (e) {
+        saveProblem = '$e';
+      }
+      await widget.events.clearCache(); // the credentials may have changed
+      result = s.isConfigured
+          ? await widget.events.api.checkConnection()
+          : 'Enter both the events token and the events database ID.';
+      if (result.contains('look right')) {
+        // Say plainly what is on today and what comes next.
+        result = '$result ${await widget.events.todaySummary()}';
+      }
+    } catch (e) {
+      result = 'Something went wrong: $e';
+    }
+    if (saveProblem != null) {
+      result = '$result Could not save these settings on the phone, so they '
+          'will be lost when the app closes ($saveProblem).';
     }
     if (!mounted) return;
     setState(() {
       _checking = false;
       _result = result;
+      _resultOk = saveProblem == null && result.contains('look right');
     });
   }
 
@@ -142,9 +160,7 @@ class _EventsSettingsPageState extends State<EventsSettingsPage> {
                   const SizedBox(height: 12),
                   Text(_result!,
                       style: TextStyle(
-                          color: _result!.contains('look right')
-                              ? Colors.green
-                              : scheme.error)),
+                          color: _resultOk ? Colors.green : scheme.error)),
                 ],
                 const SizedBox(height: 8),
                 Text(widget.events.lastCheckText,
