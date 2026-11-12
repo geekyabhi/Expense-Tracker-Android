@@ -1,13 +1,13 @@
 import 'package:expense_tracker/screens/settings_screen.dart';
-import 'package:expense_tracker/services/api_service.dart';
 import 'package:expense_tracker/services/events_api.dart';
 import 'package:expense_tracker/services/events_service.dart';
 import 'package:expense_tracker/services/events_settings.dart';
-import 'package:expense_tracker/services/notion_settings.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+
+import 'fakes.dart';
 
 /// Stands in for the Android side of the "expense_tracker/watcher" channel.
 class FakeAndroid {
@@ -52,11 +52,11 @@ void main() {
   setUp(() => SharedPreferences.setMockInitialValues({}));
 
   late FakeAndroid android;
-  late ApiService api;
+  late Harness h;
   late EventsService events;
 
   Future<void> open(WidgetTester t,
-      {bool notion = false, bool eventsOn = false, int gap = 240}) async {
+      {bool signedIn = false, bool manual = false, bool eventsOn = false, int gap = 240}) async {
     t.view.physicalSize = const Size(800, 3000);
     t.view.devicePixelRatio = 2.0;
     addTearDown(t.view.resetPhysicalSize);
@@ -65,16 +65,13 @@ void main() {
     t.binding.defaultBinaryMessenger.setMockMethodCallHandler(channel, android.handle);
     addTearDown(() => t.binding.defaultBinaryMessenger.setMockMethodCallHandler(channel, null));
 
-    api = ApiService(
-        settings: notion
-            ? NotionSettings(token: 't', databaseId: 'd')
-            : NotionSettings());
+    h = await Harness.create(signedIn: signedIn, autoSync: !manual);
     events = EventsService(
         api: EventsApi(
             settings: eventsOn
                 ? EventsSettings(token: 't', databaseId: 'd', gapMinutes: gap)
                 : EventsSettings()));
-    await t.pumpWidget(MaterialApp(home: SettingsScreen(api: api, events: events)));
+    await t.pumpWidget(MaterialApp(home: SettingsScreen(account: h.account, repo: h.repo, events: events)));
     await t.pumpAndSettle();
   }
 
@@ -88,11 +85,11 @@ void main() {
 
   setUp(() => android = FakeAndroid());
 
-  testWidgets('the main list has the five folders', (t) async {
+  testWidgets('the main list has the four folders, and no Events', (t) async {
     await open(t);
+    expect(folder('Events'), findsNothing);
     for (final name in [
-      'Expenses & Notion',
-      'Events',
+      'Account & sync',
       'Floating button',
       'Close-an-app popup',
       'Permissions',
@@ -100,15 +97,14 @@ void main() {
       expect(folder(name), findsOneWidget, reason: name);
     }
     // Nothing from inside the folders is on the main list.
-    expect(find.text('Notion Bearer token'), findsNothing);
+    expect(find.text('Sign out of all devices'), findsNothing);
     expect(find.text('Show event popups'), findsNothing);
     expect(find.widgetWithText(SwitchListTile, 'Floating + button'), findsNothing);
   });
 
   testWidgets('each folder shows a one-line status', (t) async {
     await open(t);
-    expect(summaryOf(t, 'Expenses & Notion'), 'Not set up');
-    expect(summaryOf(t, 'Events'), 'Not set up');
+    expect(summaryOf(t, 'Account & sync'), 'Not signed in');
     expect(summaryOf(t, 'Floating button'), 'Off');
     expect(summaryOf(t, 'Close-an-app popup'), 'Off');
     expect(summaryOf(t, 'Permissions'), '3 of 3 granted');
@@ -120,18 +116,11 @@ void main() {
       ..watcher = true
       ..watched = {'com.gpay', 'com.swiggy'}
       ..overlay = false;
-    await open(t, notion: true, eventsOn: true, gap: 240);
-    expect(summaryOf(t, 'Expenses & Notion'), 'Connected · Auto sync');
-    expect(summaryOf(t, 'Events'), 'Popups on · gap: 4 hours');
+    await open(t, signedIn: true, eventsOn: true, gap: 240);
+    expect(summaryOf(t, 'Account & sync'), 'user@example.com · Auto sync');
     expect(summaryOf(t, 'Floating button'), 'On');
     expect(summaryOf(t, 'Close-an-app popup'), 'On · 2 apps');
     expect(summaryOf(t, 'Permissions'), '2 of 3 granted');
-  });
-
-  testWidgets('"Every time I open the app" reads naturally in the status',
-      (t) async {
-    await open(t, eventsOn: true, gap: 0);
-    expect(summaryOf(t, 'Events'), 'Popups on · gap: every time I open the app');
   });
 
   testWidgets('each folder opens its own page', (t) async {
@@ -146,17 +135,11 @@ void main() {
       expect(folder(name), findsOneWidget); // back on the main list
     }
 
-    await visit('Expenses & Notion', () {
-      expect(find.text('Notion Bearer token'), findsOneWidget);
-      expect(find.text('Save & test connection'), findsOneWidget);
+    await visit('Account & sync', () {
+      expect(find.text('Sign out of all devices'), findsOneWidget);
+      expect(find.text('Sign out'), findsWidgets);
       expect(find.text('Auto'), findsOneWidget);
       expect(find.text('Manual'), findsOneWidget);
-    });
-    await visit('Events', () {
-      expect(find.text('Events Bearer token'), findsOneWidget);
-      expect(find.text('Save & test events'), findsOneWidget);
-      expect(find.text('Show event popups'), findsOneWidget);
-      expect(find.text('Preview an event popup'), findsOneWidget);
     });
     await visit('Floating button', () {
       expect(find.widgetWithText(SwitchListTile, 'Floating + button'), findsOneWidget);
@@ -175,9 +158,9 @@ void main() {
   });
 
   testWidgets('the status updates when you come back from a folder', (t) async {
-    await open(t, notion: true);
+    await open(t, signedIn: true);
     expect(summaryOf(t, 'Floating button'), 'Off');
-    expect(summaryOf(t, 'Expenses & Notion'), 'Connected · Auto sync');
+    expect(summaryOf(t, 'Account & sync'), 'user@example.com · Auto sync');
 
     // Turn the floating button on.
     await t.tap(folder('Floating button'));
@@ -189,13 +172,13 @@ void main() {
     expect(summaryOf(t, 'Floating button'), 'On');
 
     // Switch sync to Manual.
-    await t.tap(folder('Expenses & Notion'));
+    await t.tap(folder('Account & sync'));
     await t.pumpAndSettle();
     await t.tap(find.text('Manual'));
     await t.pumpAndSettle();
     await t.pageBack();
     await t.pumpAndSettle();
-    expect(summaryOf(t, 'Expenses & Notion'), 'Connected · Manual sync');
+    expect(summaryOf(t, 'Account & sync'), 'user@example.com · Manual sync');
   });
 
   testWidgets('picking an app in its folder updates the count', (t) async {

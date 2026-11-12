@@ -354,7 +354,7 @@ class ExpensePopup(
                         Toast.makeText(
                             ctx,
                             when {
-                                uploaded -> "Saved and uploaded to Notion"
+                                uploaded -> "Saved and uploaded"
                                 !Prefs.autoSync(ctx) -> "Saved on device"
                                 else -> "Saved on device, push it from the app later"
                             },

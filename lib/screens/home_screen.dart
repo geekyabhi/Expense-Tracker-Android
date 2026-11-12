@@ -4,6 +4,8 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
 import '../models/expense.dart';
+import '../services/account_controller.dart';
+import '../config/app_config.dart';
 import '../services/events_api.dart';
 import '../services/events_service.dart';
 import '../services/events_settings.dart';
@@ -13,17 +15,17 @@ import '../utils/format.dart';
 import 'event_dialog.dart';
 import 'settings_screen.dart';
 
-/// Asks before deleting; the text depends on what will happen in Notion.
+/// Asks before deleting; the text depends on what will happen on the server.
 Future<bool> confirmDelete(
     BuildContext context, ExpenseRepository repo, List<Expense> list) async {
-  final inNotion = list.where((e) => e.remoteId != null).length;
-  final auto = repo.api.settings.autoSync && repo.api.settings.isConfigured;
+  final onServer = list.where((e) => e.remoteId != null).length;
+  final auto = repo.sync.autoSync && repo.signedIn;
   final what = list.length == 1 ? '“${list.first.title}”' : '${list.length} expenses';
-  final extra = inNotion == 0
-      ? 'It was never pushed to Notion, so only the copy on this phone is removed.'
+  final extra = onServer == 0
+      ? 'It was never uploaded, so only the copy on this phone is removed.'
       : auto
-          ? 'It will also be archived in Notion (recoverable from Notion’s trash).'
-          : 'Its Notion page will be archived when you tap Apply on the '
+          ? 'It will also be deleted on the server.'
+          : 'It will be deleted on the server when you tap Apply on the '
               'Expenses screen.';
   final ok = await showDialog<bool>(
     context: context,
@@ -48,19 +50,21 @@ Future<bool> confirmDelete(
 String deleteMessage(DeleteSummary r) {
   final b = StringBuffer(
       'Deleted ${r.removed} expense${r.removed == 1 ? '' : 's'}');
-  if (r.archived > 0) b.write(' and archived in Notion');
+  if (r.archived > 0) b.write(' and deleted on the server');
   if (r.queued > 0) {
     b.write('. ${r.queued} archive${r.queued == 1 ? '' : 's'} waiting in '
-        'Notion, tap Apply');
+        'the server, tap Apply');
   }
   return b.toString();
 }
 
 class HomeScreen extends StatefulWidget {
-  HomeScreen({super.key, required this.repo, EventsService? events})
+  HomeScreen(
+      {super.key, required this.repo, required this.account, EventsService? events})
       : events = events ??
             EventsService(api: EventsApi(settings: EventsSettings()));
   final ExpenseRepository repo;
+  final AccountController account;
   final EventsService events;
 
   @override
@@ -77,7 +81,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     // Opening the app: show today's events (after the first frame is up).
-    WidgetsBinding.instance.addPostFrameCallback((_) => _showDueEvents());
+    if (kEventsEnabled) {
+      WidgetsBinding.instance.addPostFrameCallback((_) => _showDueEvents());
+    }
   }
 
   @override
@@ -89,7 +95,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     // Coming back to the app counts as opening it.
-    if (state == AppLifecycleState.resumed) _showDueEvents();
+    if (kEventsEnabled && state == AppLifecycleState.resumed) _showDueEvents();
   }
 
   /// Pops up one of today's events, respecting the minimum gap set in
@@ -138,21 +144,15 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         }
       });
 
-  /// True when Notion is set up; otherwise says so, with a way to Settings.
-  bool _notionReady() {
-    if (repo.api.settings.isConfigured) return true;
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-      content: const Text('Add your Notion token and database ID first'),
-      action: SnackBarAction(
-        label: 'Settings',
-        onPressed: () => Navigator.of(context).push(MaterialPageRoute(
-            builder: (_) => SettingsScreen(api: repo.api, events: widget.events, repo: repo))),
-      ),
-    ));
+  /// True when signed in; otherwise says so.
+  bool _signedIn() {
+    if (repo.signedIn) return true;
+    ScaffoldMessenger.of(context)
+        .showSnackBar(const SnackBar(content: Text('Sign in first')));
     return false;
   }
 
-  /// Asks before removing expenses that were deleted in Notion: the phone's
+  /// Asks before removing expenses that were deleted on the server: the phone's
   /// copy would then be the only copy.
   Future<bool> _confirmRemoval(List<Expense> missing) async {
     if (!mounted) return false;
@@ -162,14 +162,14 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: Text('$n expense${n == 1 ? ' was' : 's were'} deleted in Notion'),
+        title: Text('$n expense${n == 1 ? ' was' : 's were'} deleted on the server'),
         content: Text(
           '$shown$more\n\nRemove ${n == 1 ? 'it' : 'them'} from this phone too? '
           'This phone would no longer have ${n == 1 ? 'it' : 'them'} anywhere. '
-          'Notion keeps deleted pages in its trash for a while.\n\n'
+          '\n\n'
           'If you keep ${n == 1 ? 'it' : 'them'}, ${n == 1 ? 'it is' : 'they are'} '
           'marked as not uploaded, so you can push ${n == 1 ? 'it' : 'them'} to '
-          'Notion again.',
+          'the server again.',
         ),
         actions: [
           TextButton(
@@ -186,23 +186,23 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     return ok ?? false;
   }
 
-  Future<void> _syncFromNotion() async {
-    if (!_notionReady()) return;
+  Future<void> _syncFromServer() async {
+    if (!_signedIn()) return;
     final messenger = ScaffoldMessenger.of(context);
-    final r = await repo.importFromNotion(confirmRemoval: _confirmRemoval);
+    final r = await repo.refreshFromServer(confirmRemoval: _confirmRemoval);
     if (!mounted) return;
     final parts = [
       if (r.added > 0) 'Added ${r.added}',
-      if (r.updated > 0) 'updated ${r.updated} from Notion edits',
-      if (r.removed > 0) 'removed ${r.removed} deleted in Notion',
+      if (r.updated > 0) 'updated ${r.updated} from the server',
+      if (r.removed > 0) 'removed ${r.removed} deleted on the server',
       if (r.refreshed > 0) 'updated ${r.refreshed} processed status',
     ];
     var text = r.error ??
         (parts.isEmpty
-            ? 'Already matches Notion (${r.total} expense${r.total == 1 ? '' : 's'}).'
+            ? 'Already matches the server (${r.total} expense${r.total == 1 ? '' : 's'}).'
             : '${parts.join(', ')}.');
     if (r.error == null && r.missing > 0) {
-      text += ' ${r.missing} not in Notion, kept on the phone and marked not '
+      text += ' ${r.missing} not on the server, kept on the phone and marked not '
           'uploaded.';
     }
     messenger
@@ -214,7 +214,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }
 
   Future<void> _applyDeletes() async {
-    if (!_notionReady()) return;
+    if (!_signedIn()) return;
     final messenger = ScaffoldMessenger.of(context);
     final left = repo.pendingDeletes;
     final done = await repo.applyPendingDeletes();
@@ -222,7 +222,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       ..hideCurrentSnackBar()
       ..showSnackBar(SnackBar(
         content: Text(done == left
-            ? 'Archived $done in Notion'
+            ? 'Deleted $done on the server'
             : 'Archived $done of $left. Try again when you are online.'),
       ));
   }
@@ -243,7 +243,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
   Future<void> _pushSelected() async {
     final messenger = ScaffoldMessenger.of(context);
-    if (!_notionReady()) return;
+    if (!_signedIn()) return;
     final chosen = repo.expenses.where((e) => _selected.contains(e.id));
     final r = await repo.pushMany(chosen);
     if (!mounted) return;
@@ -330,14 +330,14 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       title: const Text('Expenses'),
       actions: [
         IconButton(
-          tooltip: 'Sync from Notion',
+          tooltip: 'Sync from server',
           icon: repo.importing
               ? const SizedBox(
                   width: 20,
                   height: 20,
                   child: CircularProgressIndicator(strokeWidth: 2))
               : const Icon(Icons.cloud_download_outlined),
-          onPressed: repo.importing ? null : _syncFromNotion,
+          onPressed: repo.importing ? null : _syncFromServer,
         ),
         if (repo.expenses.isNotEmpty)
           IconButton(
@@ -349,7 +349,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           icon: const Icon(Icons.settings_outlined),
           onPressed: () => Navigator.of(context).push(
               MaterialPageRoute(
-              builder: (_) => SettingsScreen(api: repo.api, events: widget.events, repo: repo))),
+              builder: (_) => SettingsScreen(
+                  account: widget.account, repo: repo, events: widget.events))),
         ),
       ],
     );
@@ -411,7 +412,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     return Padding(
       padding: const EdgeInsets.only(bottom: 8),
       child: Card(
-        // Green = processed in Notion, red = not processed yet.
+        // Green = processed, red = not processed yet.
         color: Color.alphaBlend(
           (e.processed ? Colors.green : Colors.red).withValues(alpha: 0.14),
           scheme.surfaceContainerLow,
@@ -514,7 +515,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                 Expanded(
                   child: Text(
                     '${repo.pendingDeletes} deleted expense'
-                    '${repo.pendingDeletes == 1 ? '' : 's'} not archived in Notion yet',
+                    '${repo.pendingDeletes == 1 ? '' : 's'} not deleted on the server yet',
                   ),
                 ),
                 TextButton(onPressed: _applyDeletes, child: const Text('Apply')),
@@ -558,11 +559,16 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         child: Scaffold(
           appBar: _appBar(),
           body: RefreshIndicator(
-            onRefresh: _syncFromNotion,
+            onRefresh: _syncFromServer,
             child: repo.expenses.isEmpty
                 ? ListView(
                     physics: const AlwaysScrollableScrollPhysics(),
                     children: [
+                      if (repo.pendingDeletes > 0)
+                        Padding(
+                          padding: const EdgeInsets.fromLTRB(16, 4, 16, 0),
+                          child: _pendingBanner(),
+                        ),
                       SizedBox(
                         height: MediaQuery.of(context).size.height * 0.6,
                         child: _empty(),
@@ -640,7 +646,7 @@ class _ExpenseFormScreenState extends State<ExpenseFormScreen> {
       };
 
   /// Saved options first, then anything already used by an expense (popup app
-  /// names, rows imported from Notion...), then the current selection.
+  /// names, rows from the server...), then the current selection.
   List<String> _choices(OptionKind kind, String selected) {
     final seen = <String>{};
     final out = <String>[];
@@ -841,7 +847,7 @@ class _ExpenseFormScreenState extends State<ExpenseFormScreen> {
                         : Colors.red,
                   ),
                   label: Text(widget.existing!.processed
-                      ? 'Processed in Notion'
+                      ? 'Processed'
                       : 'Not processed yet'),
                 ),
               ),
@@ -996,7 +1002,8 @@ Future<void> _pushInBackground(ExpenseRepository repo,
   final r = await repo.autoPush(saved);
   final text = switch (r?.status) {
     null => 'Saved on device',
-    PushStatus.ok => 'Saved and uploaded to Notion',
+    PushStatus.ok => 'Saved and uploaded',
+    PushStatus.signedOut => 'Saved on device. Sign in again to upload.',
     PushStatus.offline => 'Saved on device. No connection, push it later.',
     PushStatus.rejected => 'Saved on device. ${r!.message}',
     PushStatus.busy => 'Saved on device',

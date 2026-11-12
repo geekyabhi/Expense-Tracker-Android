@@ -3,7 +3,6 @@ import 'package:flutter/material.dart';
 import '../../models/app_event.dart';
 import '../../services/events_service.dart';
 import '../../services/events_settings.dart';
-import '../../services/notion_settings.dart';
 import '../event_dialog.dart';
 import 'settings_ui.dart';
 
@@ -44,7 +43,7 @@ class _EventsSettingsPageState extends State<EventsSettingsPage> {
         .trim()
         .replaceFirst(RegExp(r'^bearer\s+', caseSensitive: false), '');
     _token.text = s.token;
-    s.databaseId = NotionSettings.normalizeDatabaseId(_db.text);
+    s.databaseId = EventsSettings.normalizeDatabaseId(_db.text);
     _db.text = s.databaseId;
 
     // Saving can fail (storage problem). That must not stop the test, and the

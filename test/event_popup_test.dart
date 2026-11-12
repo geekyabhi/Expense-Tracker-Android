@@ -2,21 +2,17 @@ import 'dart:convert';
 
 import 'package:expense_tracker/models/app_event.dart';
 import 'package:expense_tracker/screens/home_screen.dart';
-import 'package:expense_tracker/screens/settings_screen.dart';
-import 'package:expense_tracker/services/api_service.dart';
 import 'package:expense_tracker/services/events_api.dart';
 import 'package:expense_tracker/services/events_service.dart';
 import 'package:expense_tracker/services/events_settings.dart';
-import 'package:expense_tracker/services/expense_repository.dart';
-import 'package:expense_tracker/services/notion_settings.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'fakes.dart';
+import 'ui_helpers.dart';
 
 Map<String, dynamic> _page(String id,
         {String title = 'Happy Anniversary!',
@@ -328,156 +324,17 @@ void main() {
     });
   });
 
-  group('the popup in the app', () {
-    ExpenseRepository repo() =>
-        ExpenseRepository(db: FakeDb(), api: ApiService(settings: NotionSettings()));
-
-    testWidgets('opening the app shows the Title and Subtitle from Notion',
-        (t) async {
+  group('events are switched off in the app for now', () {
+    testWidgets('an event due today shows no popup when the app opens', (t) async {
       final s = Setup();
-      await t.pumpWidget(MaterialApp(home: HomeScreen(repo: repo(), events: s.service)));
-      await t.pumpAndSettle();
-
-      expect(find.text('Happy Anniversary!'), findsOneWidget);
-      expect(find.text('So much love'), findsOneWidget);
-      expect(find.text('Anniversary'), findsOneWidget); // the Type chip
-
-      await t.tap(find.text('Close'));
-      await t.pumpAndSettle();
-      expect(find.text('Happy Anniversary!'), findsNothing);
-    });
-
-    testWidgets('no popup when nothing is on today', (t) async {
-      final s = Setup(pages: [_page('p1', date: '2026-12-25', repeats: null)]);
-      await t.pumpWidget(MaterialApp(home: HomeScreen(repo: repo(), events: s.service)));
-      await t.pumpAndSettle();
-      expect(find.byType(Dialog), findsNothing);
-    });
-
-    testWidgets('coming back to the app respects the minimum gap', (t) async {
-      final s = Setup(gap: 60); // 1 hour
-      await t.pumpWidget(MaterialApp(home: HomeScreen(repo: repo(), events: s.service)));
-      await t.pumpAndSettle();
-      expect(find.text('Happy Anniversary!'), findsOneWidget);
-      await t.tap(find.text('Close'));
-      await t.pumpAndSettle();
-
-      Future<void> reopenApp() async {
-        t.binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
-        await t.pump();
-        t.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
-        await t.pumpAndSettle();
-      }
-
-      s.now = DateTime(2026, 10, 28, 9, 30); // only 30 minutes later
-      await reopenApp();
-      expect(find.text('Happy Anniversary!'), findsNothing);
-
-      s.now = DateTime(2026, 10, 28, 10, 5); // past the 1 hour gap
-      await reopenApp();
-      expect(find.text('Happy Anniversary!'), findsOneWidget);
-    });
-
-    testWidgets('several events today: one popup, the next after the gap',
-        (t) async {
-      final s = Setup(pages: [
-        _page('p1', title: 'First'),
-        _page('p2', title: 'Second'),
-      ], gap: 60);
-      await t.pumpWidget(MaterialApp(home: HomeScreen(repo: repo(), events: s.service)));
-      await t.pumpAndSettle();
-
-      // Only one of them, even though both are today.
-      expect(find.text('First'), findsOneWidget);
-      expect(find.text('Second'), findsNothing);
-      await t.tap(find.text('Close'));
-      await t.pumpAndSettle();
-      expect(find.byType(Dialog), findsNothing);
-
-      Future<void> reopenApp() async {
-        t.binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
-        await t.pump();
-        t.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
-        await t.pumpAndSettle();
-      }
-
-      s.now = DateTime(2026, 10, 28, 9, 30); // inside the gap
-      await reopenApp();
-      expect(find.byType(Dialog), findsNothing);
-
-      s.now = DateTime(2026, 10, 28, 10, 5); // gap over: the other one
-      await reopenApp();
-      expect(find.text('Second'), findsOneWidget);
-      expect(find.text('First'), findsNothing);
-    });
-  });
-
-  group('Settings: popup controls', () {
-    Future<void> openSettings(WidgetTester t, Setup s) async {
-      t.view.physicalSize = const Size(800, 5000);
-      t.view.devicePixelRatio = 2.0;
-      addTearDown(t.view.resetPhysicalSize);
-      addTearDown(t.view.resetDevicePixelRatio);
-      const channel = MethodChannel('expense_tracker/watcher');
-      t.binding.defaultBinaryMessenger.setMockMethodCallHandler(channel, (c) async {
-        switch (c.method) {
-          case 'getInstalledApps':
-          case 'getWatched':
-            return <Object?>[];
-          case 'permissionStatus':
-            return {'usage': true, 'overlay': true, 'battery': true};
-          case 'isEnabled':
-          case 'isBubbleEnabled':
-            return false;
-          default:
-            return null;
-        }
-      });
-      addTearDown(() =>
-          t.binding.defaultBinaryMessenger.setMockMethodCallHandler(channel, null));
+      final h = await Harness.create();
+      fakeAndroid(t);
       await t.pumpWidget(MaterialApp(
-          key: UniqueKey(), // a fresh app each time, not the previous page
-          home: SettingsScreen(
-              api: ApiService(settings: NotionSettings()), events: s.service)));
+          key: UniqueKey(),
+          home: HomeScreen(account: h.account, repo: h.repo, events: s.service)));
       await t.pumpAndSettle();
-      await t.tap(find.text('Events')); // open the folder
-      await t.pumpAndSettle();
-    }
-
-    testWidgets('the switch and the gap are saved', (t) async {
-      final s = Setup(gap: 240);
-      await openSettings(t, s);
-
-      await t.tap(find.widgetWithText(SwitchListTile, 'Show event popups'));
-      await t.pumpAndSettle();
-      expect(s.service.settings.popupEnabled, isFalse);
-
-      await t.tap(find.byType(DropdownButtonFormField<int>));
-      await t.pumpAndSettle();
-      await t.tap(find.text('1 hour').last);
-      await t.pumpAndSettle();
-      expect(s.service.settings.gapMinutes, 60);
-
-      // Stored on the device.
-      final stored = await EventsSettings.load();
-      expect(stored.popupEnabled, isFalse);
-      expect(stored.gapMinutes, 60);
-    });
-
-    testWidgets('preview shows the next real event, or a sample', (t) async {
-      final real = Setup();
-      await openSettings(t, real);
-      await t.tap(find.text('Preview an event popup'));
-      await t.pumpAndSettle();
-      expect(find.text('Happy Anniversary!'), findsOneWidget);
-      await t.tap(find.text('Close'));
-      await t.pumpAndSettle();
-
-      final none = Setup(configured: false);
-      await openSettings(t, none);
-      await t.tap(find.text('Preview an event popup'));
-      await t.pumpAndSettle();
-      expect(find.text('Your event title'), findsOneWidget);
+      expect(find.text('Happy Anniversary!'), findsNothing);
+      expect(find.byType(Dialog), findsNothing);
     });
   });
 }

@@ -1,9 +1,10 @@
 import 'package:expense_tracker/screens/settings_screen.dart';
-import 'package:expense_tracker/services/api_service.dart';
-import 'package:expense_tracker/services/notion_settings.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+
+import 'ui_helpers.dart';
+import 'fakes.dart';
 
 /// Stands in for the Android side of the "expense_tracker/watcher" channel.
 class FakeAndroid {
@@ -46,8 +47,9 @@ void main() {
         const MethodChannel('expense_tracker/watcher'), android.handle);
     addTearDown(() => t.binding.defaultBinaryMessenger.setMockMethodCallHandler(
         const MethodChannel('expense_tracker/watcher'), null));
+    final h = await Harness.create();
     await t.pumpWidget(MaterialApp(
-        home: SettingsScreen(api: ApiService(settings: NotionSettings()))));
+        home: SettingsScreen(account: h.account, repo: h.repo, events: noEvents())));
     await t.pumpAndSettle();
     await t.tap(find.text('Floating button')); // open the folder
     await t.pumpAndSettle();

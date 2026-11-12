@@ -83,6 +83,45 @@ class OptionsStore extends ChangeNotifier {
     return clean;
   }
 
+  /// Adds the names the server knows that are not here yet (never removes any).
+  Future<void> mergeFromServer({
+    List<String> categories = const [],
+    List<String> modes = const [],
+    List<String> sources = const [],
+  }) async {
+    var changed = false;
+    for (final (kind, names) in [
+      (OptionKind.category, categories),
+      (OptionKind.mode, modes),
+      (OptionKind.source, sources),
+    ]) {
+      final list = listOf(kind);
+      for (final raw in names) {
+        final name = raw.replaceAll(',', ' ').trim();
+        if (name.isEmpty || contains(kind, name)) continue;
+        list.add(name);
+        changed = true;
+      }
+      if (changed) await _save(kind);
+    }
+    if (changed) notifyListeners();
+  }
+
+  /// Back to the built-in lists (a different account is signing in).
+  Future<void> reset() async {
+    categories
+      ..clear()
+      ..addAll(kCategories);
+    modes
+      ..clear()
+      ..add(kDefaultMode);
+    sources.clear();
+    for (final kind in OptionKind.values) {
+      await _save(kind);
+    }
+    notifyListeners();
+  }
+
   /// Removes it from the list. The default mode can't be removed.
   Future<void> remove(OptionKind kind, String name) async {
     if (kind == OptionKind.mode && name == kDefaultMode) return;

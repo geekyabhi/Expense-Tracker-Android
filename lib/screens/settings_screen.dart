@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
-import '../services/api_service.dart';
+import '../services/account_controller.dart';
+import '../config/app_config.dart';
 import '../services/events_api.dart';
 import '../services/events_service.dart';
 import '../services/events_settings.dart';
@@ -9,22 +10,19 @@ import '../services/watcher_channel.dart';
 import 'settings/app_watcher_page.dart';
 import 'settings/events_page.dart';
 import 'settings/floating_button_page.dart';
-import 'settings/notion_page.dart';
+import 'settings/account_page.dart';
 import 'settings/permissions_page.dart';
 
 /// The settings home: a short list of folders. Each folder opens its own page
 /// and shows a one-line status.
 class SettingsScreen extends StatefulWidget {
   SettingsScreen(
-      {super.key, required this.api, EventsService? events, this.repo})
+      {super.key, required this.account, required this.repo, EventsService? events})
       : events = events ??
             EventsService(api: EventsApi(settings: EventsSettings()));
-  final ApiService api;
+  final AccountController account;
+  final ExpenseRepository repo;
   final EventsService events;
-
-  /// Needed to deal with the expenses on the phone when the Notion database is
-  /// switched. Without it, switching just changes the connection.
-  final ExpenseRepository? repo;
 
   @override
   State<SettingsScreen> createState() => _SettingsScreenState();
@@ -81,10 +79,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   // ----------------------------------------------------------- summaries
 
-  String get _notionSummary {
-    final s = widget.api.settings;
-    if (!s.isConfigured) return 'Not set up';
-    return 'Connected · ${s.autoSync ? 'Auto sync' : 'Manual sync'}';
+  String get _accountSummary {
+    final user = widget.account.session.user;
+    if (user == null) return 'Not signed in';
+    return '${user.label} · ${widget.repo.sync.autoSync ? 'Auto sync' : 'Manual sync'}';
   }
 
   String get _eventsSummary {
@@ -152,18 +150,19 @@ class _SettingsScreenState extends State<SettingsScreen> {
         padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
         children: [
           _folder(
-            icon: Icons.account_balance_wallet_outlined,
-            title: 'Expenses & Notion',
-            summary: _notionSummary,
-            onTap: () =>
-                _open(NotionSettingsPage(api: widget.api, repo: widget.repo)),
+            icon: Icons.account_circle_outlined,
+            title: 'Account & sync',
+            summary: _accountSummary,
+            onTap: () => _open(
+                AccountPage(account: widget.account, repo: widget.repo)),
           ),
-          _folder(
-            icon: Icons.event_outlined,
-            title: 'Events',
-            summary: _eventsSummary,
-            onTap: () => _open(EventsSettingsPage(events: widget.events)),
-          ),
+          if (kEventsEnabled)
+            _folder(
+              icon: Icons.event_outlined,
+              title: 'Events',
+              summary: _eventsSummary,
+              onTap: () => _open(EventsSettingsPage(events: widget.events)),
+            ),
           _folder(
             icon: Icons.add_circle_outline,
             title: 'Floating button',

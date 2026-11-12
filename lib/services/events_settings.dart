@@ -40,6 +40,13 @@ class EventsSettings {
   bool get isConfigured =>
       token.trim().isNotEmpty && databaseId.trim().isNotEmpty;
 
+  /// Accepts a bare id or a pasted database URL and returns the 32-char id.
+  static String normalizeDatabaseId(String input) {
+    final m = RegExp(r'[0-9a-fA-F]{32}')
+        .firstMatch(input.replaceAll('-', '').trim());
+    return m?.group(0) ?? input.trim();
+  }
+
   static const _kToken = 'events_token';
   static const _kDb = 'events_database_id';
   static const _kEnabled = 'events_popup_enabled';

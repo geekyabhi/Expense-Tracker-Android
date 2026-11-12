@@ -57,11 +57,12 @@ class WatcherChannel {
   static Future<void> setEnabled(bool enabled) =>
       _ch.invokeMethod('setEnabled', {'enabled': enabled});
 
-  /// Gives the native popup the Notion credentials and sync mode.
-  static Future<void> setNotion(
-          String token, String databaseId, bool autoSync) =>
-      _ch.invokeMethod('setNotion',
-          {'token': token, 'databaseId': databaseId, 'autoSync': autoSync});
+  /// Gives the native popup (and floating button) what it needs to upload an
+  /// expense itself: the server, the signed-in token (empty when signed out) and
+  /// the Auto/Manual choice.
+  static Future<void> setBackend(String serverUrl, String token, bool autoSync) =>
+      _ch.invokeMethod('setBackend',
+          {'serverUrl': serverUrl, 'token': token, 'autoSync': autoSync});
 
   /// Shows the popup right now (nothing is saved).
   static Future<void> previewPopup() => _ch.invokeMethod('previewPopup');

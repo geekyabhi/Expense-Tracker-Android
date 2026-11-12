@@ -1,19 +1,22 @@
 # Expensive
 
-A Flutter expense tracker that works offline first and syncs to Notion.
+A Flutter expense tracker that works offline first and syncs to your own
+Expenses server (the Django "Personal Shortcut" backend).
 
 - **Add expenses fast:** from the app, from a floating **+** button that sits on
   the screen edge over every app, or from a popup that appears when you close
   an app you chose (for example a payment app). The popup puts that app's name
   in the expense's **Mode**.
+- **One account, any sign-in:** email + password, phone + password or Google all
+  open the same account. The token is kept in the Android keystore.
 - **Offline first:** every expense is saved on the phone (SQLite). In **Auto**
-  sync mode it is pushed to Notion right after saving; if that fails it waits.
+  sync mode it is uploaded right after saving; if that fails it waits.
   In **Manual** mode nothing is sent until you select expenses and tap **Push**.
-- **Full CRUD with Notion:** create, update (the same page is updated, never
-  duplicated), read (**Sync from Notion** imports rows you don't have yet) and
-  delete (the Notion page is archived).
-- **Your own categories, modes and sources**, saved on the phone.
-- **Event popups:** a second Notion database holds events (Title, Subtitle,
+- **Full CRUD:** create, update (the same expense is updated, never
+  duplicated), delete, and **Sync from server** (new expenses and website edits
+  come in; expenses deleted on the server are only removed after you confirm).
+- **Your own categories, modes and sources**, also learned from the server.
+- **Event popups:** a Notion database holds events (Title, Subtitle,
   Date, Repeats). When you open the app, one of today's events pops up.
 
 Android is the main target (the overlay features are Android-only).
@@ -26,23 +29,25 @@ flutter run          # a connected Android phone or an emulator
 flutter test         # unit and widget tests
 ```
 
-## Connect Notion
+## Sign in and server
 
-Nothing secret is stored in this repository. Open **Settings** in the app and
-paste each token and database ID there. They are kept on the phone only
-(unencrypted app storage), so treat the phone as the trust boundary.
+The app always talks to `https://personal.singhabhinav.in` (set in
+`lib/config/app_config.dart`). Settings → Account & sync shows the account,
+switches Auto/Manual and signs out.
 
-**Expenses database** (Settings → Expenses & Notion) needs these columns:
+- Signing in as a *different* account removes the expenses on the phone (they
+  belong to the other account); signing back in as the same account keeps them,
+  including ones not uploaded yet. Sign-out warns you first.
+- **Google sign-in needs set-up outside the app:** the server must expose
+  `POST /api/users/google/` (the deployed server does not yet), and Google Cloud
+  needs an *Android* OAuth client for package `com.example.expense_tracker` with
+  the SHA-1 of the signing key. The server verifies the token against the web
+  client ID set in `lib/config/app_config.dart`.
+- The server keeps one source per expense, so extra sources can't be stored; a
+  multi-category expense is shown as "A, B" and re-sent as-is.
 
-| Column | Type |
-|---|---|
-| Expense | Title |
-| Amount | Number |
-| Date | Date |
-| Category, Source, Mode | Multi-select |
-| Processed | Checkbox (read-only here; drives the green/red rows) |
-
-**Events database** (Settings → Events) has its own token and ID, with:
+**Events database** (Settings → Events) stays on Notion, with its own token and ID. Nothing secret
+is stored in this repository; they are kept on the phone only. Columns:
 
 | Column | Type |
 |---|---|
@@ -51,8 +56,8 @@ paste each token and database ID there. They are kept on the phone only
 | Repeats | Select: Yearly, Monthly, Weekly or Daily (empty = once) |
 | Type, Name | Select, Title (optional) |
 
-Share each database with its own Notion integration (••• → Connections).
-**Save & test** in each folder checks the token and the columns.
+Share the database with its Notion integration (••• → Connections).
+**Save & test events** checks the token and the columns.
 
 ## Android permissions
 
@@ -63,10 +68,10 @@ Settings → Permissions shows what is granted.
 
 ## Layout
 
-- `lib/` – the Flutter app (`services/` for storage and Notion, `screens/`)
+- `lib/` – the Flutter app (`services/` for storage, the server and Notion, `screens/`)
 - `android/app/src/main/kotlin/` – the overlay popup, floating button and the
   background service
-- `test/` – tests (Notion calls are faked with `MockClient`)
+- `test/` – tests (the server and Notion are faked with `MockClient`)
 
 ## Note for iCloud users
 

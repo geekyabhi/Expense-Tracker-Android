@@ -14,14 +14,14 @@ import java.util.UUID
 
 /**
  * Saves an expense into the same sqflite database (expenses.db) the Flutter app
- * uses, then tries to push it to Notion right away. If that isn't possible
- * (offline, not set up, rejected) the row stays not-uploaded and the user pushes
- * it manually from the app.
+ * uses, then, in Auto mode and when signed in, uploads it to the server right
+ * away. If that isn't possible (offline, signed out, rejected) the row stays
+ * not-uploaded and the user pushes it manually from the app.
  *
  * Must be called off the main thread.
  */
 object ExpenseStore {
-    /** Returns true if the expense also reached Notion. */
+    /** Returns true if the expense also reached the server. */
     fun save(
         ctx: Context, title: String, amount: Double, category: String, note: String, mode: String
     ): Boolean {
@@ -52,7 +52,7 @@ object ExpenseStore {
 
         if (!Prefs.autoSync(ctx)) return false // Manual mode: never upload from here
 
-        val pageId = createNotionPage(ctx, title, amount, category, mode, now) ?: return false
+        val pageId = createRemote(ctx, title, amount, category, note, mode, now) ?: return false
 
         val db2 = SQLiteDatabase.openDatabase(dbFile.path, null, SQLiteDatabase.OPEN_READWRITE)
         try {
@@ -95,46 +95,46 @@ object ExpenseStore {
         db.version = 3 // sqflite runs onCreate only while user_version is 0
     }
 
-    private fun tags(v: String): JSONArray =
-        JSONArray().apply { if (v.isNotBlank()) put(JSONObject().put("name", v.replace(",", " ").trim())) }
-
-    /** Mirrors ApiService.upload in Dart. Returns the new Notion page id, or null. */
-    private fun createNotionPage(
-        ctx: Context, title: String, amount: Double, category: String, mode: String, at: Date
+    /**
+     * Creates the expense on the server (POST /api/expenses/create/), the same
+     * request the Flutter side makes. Returns the server's id ("page_id") of the
+     * new expense, or null when it could not be created (then it stays on the
+     * phone, not uploaded).
+     */
+    private fun createRemote(
+        ctx: Context, title: String, amount: Double, category: String,
+        note: String, mode: String, at: Date
     ): String? {
-        val token = Prefs.notionToken(ctx).trim()
-        val dbId = Prefs.notionDb(ctx).trim()
-        if (token.isEmpty() || dbId.isEmpty()) return null
+        val base = Prefs.backendUrl(ctx).trim().trimEnd('/')
+        val token = Prefs.backendToken(ctx).trim()
+        if (base.isEmpty() || token.isEmpty()) return null // signed out
 
         val body = JSONObject().apply {
-            put("parent", JSONObject().put("database_id", dbId))
-            put("properties", JSONObject().apply {
-                put("Expense", JSONObject().put("title", JSONArray().put(
-                    JSONObject().put("text", JSONObject().put("content", title)))))
-                put("Amount", JSONObject().put("number", amount))
-                put("Date", JSONObject().put("date", JSONObject().put("start",
-                    SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ssXXX", Locale.US).format(at))))
-                put("Category", JSONObject().put("multi_select", tags(category)))
-                put("Source", JSONObject().put("multi_select", tags("")))
-                put("Mode", JSONObject().put("multi_select", tags(mode)))
-            })
+            put("name", title)
+            put("amount", amount)
+            put("date", SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ssXXX", Locale.US).format(at))
+            put("categories", JSONArray().put(category))
+            put("source", "")
+            put("mode", mode)
+            put("comment", note)
         }
 
         return try {
-            val conn = URL("https://api.notion.com/v1/pages").openConnection() as HttpURLConnection
+            val conn = URL("$base/api/expenses/create/").openConnection() as HttpURLConnection
             try {
                 conn.requestMethod = "POST"
                 conn.connectTimeout = 10_000
                 conn.readTimeout = 15_000
                 conn.doOutput = true
                 conn.setRequestProperty("Authorization", "Bearer $token")
-                conn.setRequestProperty("Notion-Version", "2022-06-28")
                 conn.setRequestProperty("Content-Type", "application/json")
+                conn.setRequestProperty("Accept", "application/json")
                 conn.outputStream.use { it.write(body.toString().toByteArray()) }
                 if (conn.responseCode in 200..299) {
-                    JSONObject(conn.inputStream.bufferedReader().readText()).optString("id").ifEmpty { null }
+                    val reply = JSONObject(conn.inputStream.bufferedReader().readText())
+                    reply.opt("page_id")?.toString()?.ifEmpty { null }
                 } else {
-                    null // 4xx/5xx: leave it on the device for a manual push
+                    null // 401 (expired), 4xx or 5xx: leave it on the device
                 }
             } finally {
                 conn.disconnect()

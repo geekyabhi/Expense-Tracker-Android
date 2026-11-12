@@ -82,6 +82,14 @@ class LocalDb {
     await db.delete('expenses', where: 'id = ?', whereArgs: [id]);
   }
 
+  /// Removes every expense and every waiting deletion (a different account is
+  /// signing in).
+  Future<void> clearAll() async {
+    final db = await _database;
+    await db.delete('expenses');
+    await db.delete('pending_deletes');
+  }
+
   Future<List<Expense>> all() async {
     final db = await _database;
     final rows = await db.query('expenses', orderBy: 'date DESC');

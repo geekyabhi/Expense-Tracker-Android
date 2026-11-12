@@ -51,11 +51,11 @@ class MainActivity : FlutterActivity() {
                         result.success(null)
                     }
 
-                    "setNotion" -> {
-                        Prefs.setNotion(
+                    "setBackend" -> {
+                        Prefs.setBackend(
                             this,
+                            call.argument<String>("serverUrl") ?: "",
                             call.argument<String>("token") ?: "",
-                            call.argument<String>("databaseId") ?: "",
                             call.argument<Boolean>("autoSync") ?: true
                         )
                         result.success(null)

@@ -16,13 +16,15 @@ object Prefs {
     fun enabled(c: Context) = sp(c).getBoolean("enabled", false)
     fun setEnabled(c: Context, v: Boolean) = sp(c).edit().putBoolean("enabled", v).apply()
 
-    fun notionToken(c: Context) = sp(c).getString("notion_token", "") ?: ""
-    fun notionDb(c: Context) = sp(c).getString("notion_db", "") ?: ""
+    fun backendUrl(c: Context) = sp(c).getString("backend_url", "") ?: ""
+    fun backendToken(c: Context) = sp(c).getString("backend_token", "") ?: ""
     fun autoSync(c: Context) = sp(c).getBoolean("auto_sync", true)
-    fun setNotion(c: Context, token: String, databaseId: String, autoSync: Boolean) =
+
+    /** The server, the signed-in token (empty when signed out) and Auto/Manual. */
+    fun setBackend(c: Context, url: String, token: String, autoSync: Boolean) =
         sp(c).edit()
-            .putString("notion_token", token)
-            .putString("notion_db", databaseId)
+            .putString("backend_url", url)
+            .putString("backend_token", token)
             .putBoolean("auto_sync", autoSync)
             .apply()
 

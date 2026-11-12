@@ -1,18 +1,13 @@
 import 'dart:convert';
 
 import 'package:expense_tracker/models/app_event.dart';
-import 'package:expense_tracker/screens/settings_screen.dart';
 import 'package:expense_tracker/services/api_service.dart';
 import 'package:expense_tracker/services/events_api.dart';
-import 'package:expense_tracker/services/events_service.dart';
 import 'package:expense_tracker/services/events_settings.dart';
-import 'package:expense_tracker/services/notion_settings.dart';
-import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
-import 'package:shared_preferences/shared_preferences.dart';
+
 
 AppEvent _event(DateTime date, [String repeats = '']) => AppEvent(
     id: 'e', name: 'n', title: 't', subtitle: 's', date: date, repeats: repeats);
@@ -225,102 +220,6 @@ void main() {
           contains('token is invalid'));
       expect(await _api((r) async => http.Response('{}', 404)).checkConnection(),
           contains('not found'));
-    });
-  });
-
-  group('Settings: separate events credentials', () {
-    testWidgets('the events token is used for events, never the expenses one',
-        (t) async {
-      SharedPreferences.setMockInitialValues({});
-      t.view.physicalSize = const Size(800, 4000);
-      t.view.devicePixelRatio = 2.0;
-      addTearDown(t.view.resetPhysicalSize);
-      addTearDown(t.view.resetDevicePixelRatio);
-      const channel = MethodChannel('expense_tracker/watcher');
-      t.binding.defaultBinaryMessenger.setMockMethodCallHandler(channel, (c) async {
-        switch (c.method) {
-          case 'getInstalledApps':
-          case 'getWatched':
-            return <Object?>[];
-          case 'permissionStatus':
-            return {'usage': true, 'overlay': true, 'battery': true};
-          case 'isEnabled':
-          case 'isBubbleEnabled':
-            return false;
-          default:
-            return null;
-        }
-      });
-      addTearDown(() => t.binding.defaultBinaryMessenger
-          .setMockMethodCallHandler(channel, null));
-
-      final requests = <http.Request>[];
-      final events = EventsApi(
-        settings: EventsSettings(),
-        pageGap: Duration.zero,
-        client: MockClient((r) async {
-          requests.add(r);
-          return r.method == 'GET'
-              ? http.Response(
-                  jsonEncode({
-                    'title': [
-                      {'plain_text': 'Events'}
-                    ],
-                    'properties': {
-                      'Title': {'type': 'rich_text'},
-                      'Subtitle': {'type': 'rich_text'},
-                      'Date': {'type': 'date'},
-                    }
-                  }),
-                  200)
-              : http.Response('{"results":[],"has_more":false}', 200);
-        }),
-      );
-      final expenses = ApiService(
-          settings: NotionSettings(token: 'expenses-token', databaseId: 'expenses-db'));
-
-      await t.pumpWidget(
-          MaterialApp(
-          home: SettingsScreen(api: expenses, events: EventsService(api: events))));
-      await t.pumpAndSettle();
-
-      Finder field(String label) => find.byWidgetPredicate(
-          (w) => w is TextField && w.decoration?.labelText == label);
-
-      // The expenses credentials live in their own folder.
-      await t.tap(find.text('Expenses & Notion'));
-      await t.pumpAndSettle();
-      expect(t.widget<TextField>(field('Notion Bearer token')).controller!.text,
-          'expenses-token');
-      expect(field('Events Bearer token'), findsNothing);
-      await t.pageBack();
-      await t.pumpAndSettle();
-
-      // The events ones are in another: separate fields, empty to start with.
-      await t.tap(find.text('Events'));
-      await t.pumpAndSettle();
-      expect(field('Events Bearer token'), findsOneWidget);
-      expect(field('Events database ID'), findsOneWidget);
-      expect(field('Notion Bearer token'), findsNothing);
-      expect(t.widget<TextField>(field('Events Bearer token')).controller!.text, '');
-
-      await t.enterText(field('Events Bearer token'), 'Bearer ev-secret');
-      await t.enterText(field('Events database ID'),
-          'https://www.notion.so/Events-0123456789abcdef0123456789abcdef?v=1');
-      await t.tap(find.text('Save & test events'));
-      await t.pumpAndSettle();
-
-      expect(requests, isNotEmpty);
-      for (final r in requests) {
-        expect(r.headers['Authorization'], 'Bearer ev-secret');
-        expect(r.url.path, contains('0123456789abcdef0123456789abcdef'));
-      }
-      expect(events.settings.token, 'ev-secret'); // "Bearer " stripped
-      expect(find.textContaining('look right'), findsOneWidget);
-      expect(find.textContaining('No events found in the database'), findsOneWidget);
-      // The expenses credentials were not touched.
-      expect(expenses.settings.token, 'expenses-token');
-      expect(expenses.settings.databaseId, 'expenses-db');
     });
   });
 }

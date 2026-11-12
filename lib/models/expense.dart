@@ -17,14 +17,14 @@ class Expense {
   /// triggered the popup, e.g. "GPay".
   final String mode;
 
-  /// True once the current version has reached Notion.
+  /// True once the current version has reached the server.
   final bool synced;
 
-  /// The "Processed" checkbox of its Notion page (read-only here; refreshed by
-  /// "Sync from Notion"). Drives the green/red colour of the row.
+  /// The server's "processed" flag (read-only here; refreshed by "Sync from
+  /// server"). Drives the green/red colour of the row.
   final bool processed;
 
-  /// Notion page id, set after the first successful push. Later pushes update
+  /// The server's id of this expense, set after the first successful push. Later pushes update
   /// that page instead of creating a duplicate.
   final String? remoteId;
 
@@ -53,7 +53,7 @@ class Expense {
     bool? synced,
     bool? processed,
     String? remoteId,
-    bool clearRemoteId = false, // forget the Notion page (e.g. database switched)
+    bool clearRemoteId = false, // forget the server's copy (it no longer has it)
   }) =>
       Expense(
         id: id,
